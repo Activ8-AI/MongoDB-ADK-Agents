@@ -1,22 +1,27 @@
 import os
 import pymongo
 import certifi
-import vertexai
 from google.adk.agents import Agent
-from vertexai.language_models import TextEmbeddingModel
+from google import genai
+from google.genai import types
 
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
 PROJECT_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION")
 DATABASE_NAME = os.environ.get("DATABASE_NAME")
 COLLECTION_NAME = os.environ.get("COLLECTION_NAME")
 CONNECTION_STRING = os.environ.get("CONNECTION_STRING")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+
+genai_client = genai.Client()
+database_client = pymongo.MongoClient(CONNECTION_STRING, tlsCAFile=certifi.where())
 
 def generate_embeddings(query):
-    vertexai.init(project=PROJECT_ID, location=PROJECT_LOCATION)
+    result = genai_client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=query
+    )
 
-    model = TextEmbeddingModel.from_pretrained("text-embedding-004")
-    embeddings = model.get_embeddings([query])
-    return embeddings[0].values
+    return result.embeddings[0].values
 
 def find_similar_products(query: str) -> str:
     """Searches for products with a product name semantically similar to a given product.
@@ -33,8 +38,9 @@ def find_similar_products(query: str) -> str:
     Returns:
         A list of dictionaries, each containing the product name and other relevant details.
     """
-    client = pymongo.MongoClient(CONNECTION_STRING, tlsCAFile=certifi.where())
+
     vector_embeddings = generate_embeddings(query)
+
     pipeline = [
         {
             # Perform a vector search to find similar products
@@ -43,8 +49,8 @@ def find_similar_products(query: str) -> str:
             # The query vector is generated from the user's query
             # and we limit the results to 10 candidates
             "$vectorSearch": {
-                "index": "inventory_vector_index",
-                "path": "embedding",
+                "index": "vector_index",
+                "path": "gemini_embedding",
                 "queryVector": vector_embeddings,
                 "numCandidates": 100,
                 "limit": 10
@@ -55,8 +61,7 @@ def find_similar_products(query: str) -> str:
             "$project": {
                 "_id": 0,
                 "sale_price": 0,
-                "market_price": 0,
-                "embedding": 0,
+                "gemini_embedding": 0
             }
         }
     ]
@@ -64,7 +69,7 @@ def find_similar_products(query: str) -> str:
     try :
         # Execute the aggregation pipeline to find similar products
         # The result will be a list of products with their details
-        documents = client[DATABASE_NAME][COLLECTION_NAME].aggregate(pipeline).to_list()
+        documents = database_client[DATABASE_NAME][COLLECTION_NAME].aggregate(pipeline).to_list()
         return documents
     except pymongo.errors.OperationFailure as e:
         return "Failed to find similar products."
@@ -79,20 +84,17 @@ def add_to_cart(product: str, username: str) -> str:
     Returns:
       Success or failure message.
     """
-    client = pymongo.MongoClient(CONNECTION_STRING, tlsCAFile=certifi.where())
-    products_collection = client[DATABASE_NAME][COLLECTION_NAME]
+    products_collection = database_client[DATABASE_NAME][COLLECTION_NAME]
     product_document = products_collection.find_one(
         {"product": product},
         {
-            "_id": 0,
             "product": 1,
             "sale_price": 1,
-            "market_price": 1,
-            "description": 1
+            "category": 1
         }
     )
 
-    if (not product):
+    if (not product_document):
         return f"Product {product} not found in the inventory."
 
     # Add the product to the user's cart
@@ -103,7 +105,7 @@ def add_to_cart(product: str, username: str) -> str:
     if not username:
         return "Username is required to add a product to the cart."
 
-    cart_collection = client[DATABASE_NAME]["carts"]
+    cart_collection = database_client[DATABASE_NAME]["carts"]
     cart_collection.update_one(
         {"username": username},
         {"$addToSet": {"products": product_document}},
@@ -112,27 +114,71 @@ def add_to_cart(product: str, username: str) -> str:
 
     return f"Product {product_document['product']} added to your cart."
 
+def calculate_cart_total(username: str) -> str:
+    """Calculates the total price of all products in the user cart.
+    This function retrieves the user cart from the carts collection and sums their price to return a total.
+    Args:
+      username: The name of the user.
+    
+    Returns:
+      Total price
+    """
+    cart_document = database_client[DATABASE_NAME]["carts"].find_one(
+        {"username": username},
+        {
+            "_id": 0,
+            "products": 1
+        }
+    )
+
+    total = 0
+    for product in cart_document["products"]:
+        total = total + product["sale_price"]
+
+    return total
+
 
 root_agent = Agent(
-    model="gemini-2.0-flash",
+    model="gemini-2.5-flash",
     name="grocery_shopping_agent",
     instruction=""" 
-Start the Conversation with the user being a positive and friendly agent. Introduce yourself as the "Online Groceries Agent" and ask user how can you help them today. You are a customer agent for an ecommerce company and you are here to help the user with their shopping needs.
+You are the **Online Groceries Agent**, a friendly and helpful virtual assistant for our e-commerce grocery store. 
+Start every conversation with a warm greeting, introduce yourself as the "Online Groceries Agent," and ask how you can assist the user today. 
+Your role is to guide customers through their shopping experience.
 
-You can help the user find products, add products to their cart, and answer any questions they may have about the products.
-You can use the following tools to help the user:
-1. find_similar_products: Search for products with a product name semantically similar to a given product.
-2. add_to_cart: Add a product to the user's cart in MongoDB. Only pass the product name, matching the name in the inventory collection, and the username of the user.
+What you can do:
+- Help users discover and explore products in the store.
+- Suggest alternatives when the exact item is not available.
+- Add products to the user’s shopping cart.
+- Answer product-related questions in a clear and concise way.
 
-Always search for products first before adding them to the cart. If the user asks for a product that is not in the inventory, you can suggest similar products based on their query.
-You can use the tools in parallel to help the user find products and add them to their cart.
+Available tools:
+1. **find_similar_products**: Search for products with names semantically similar to the user’s request.  
+2. **add_to_cart**: Add a product to the user’s cart in MongoDB. Pass only the product name (as it appears in the inventory collection) and the user’s username.  
+3. **calculate_cart_total**: Sum the total of all products in a user's cart and return it.
 
-Additional instructions:
-1. Ask for details only if you don't understand the query and are not able to search.
-2. You can use multiple tools in parallel by calling functions in parallel.
+Core guidelines:
+- **Always search first**: If a user asks for a product, call `find_similar_products` before attempting to add it to the cart.  
+- **Handle missing products**: If the requested product is not in the inventory, suggest similar items returned by the search.  
+- **Parallel tool use**: You may call multiple tools in parallel when appropriate (e.g., searching for several items at once).  
+- **Clarify only when necessary**: Ask for more details if the request is unclear and you cannot perform a search.  
+- Keep your tone positive, approachable, and customer-focused throughout the interaction.  
+
+Additional important instructions:
+- **Do not assume availability**: Never add a product directly to the cart without confirming it exists in the inventory.  
+- **Respect exact names**: When using `add_to_cart`, pass the product name exactly as stored in the inventory collection.  
+- **Multi-item requests**: If the user asks for several items in one message, search for all items together and suggest results before adding to the cart.  
+- **Quantity requests**: If the user specifies a quantity, repeat it back to confirm and ensure it is respected when adding to the cart.  
+- **Cart confirmation**: After adding items, confirm with the user that they have been successfully added.  
+- **Fallback behavior**: If no results are found, apologize politely, and encourage the user to try a different product or category.  
+- **Stay focused**: Only handle product discovery, shopping, and cart management tasks. Politely decline requests unrelated to groceries.  
+- **Answering product questions**: If the question is about a product (e.g., "Is this organic?" or "How much does it cost?"), use the search results to answer. If the information is not available, respond transparently that you don’t have that detail.  
+
+Remember: you are a professional yet friendly shopping assistant whose goal is to make the user’s grocery shopping smooth, efficient, and enjoyable.
     """ ,
     tools=[
         find_similar_products,
-        add_to_cart
+        add_to_cart,
+        calculate_cart_total
     ]
 )

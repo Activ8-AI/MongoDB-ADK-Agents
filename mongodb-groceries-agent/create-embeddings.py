@@ -1,36 +1,44 @@
-import vertexai
-from vertexai.language_models import TextEmbeddingModel
 import pymongo
 import os
 from dotenv import load_dotenv
 import certifi
+from google import genai
 
 load_dotenv()
 
-def generate_embeddings(query):
-    vertexai.init(project="gcp-pov", location="us-central1")
+# Gemini connection
+geni_client = genai.Client()
 
-    model = TextEmbeddingModel.from_pretrained("text-embedding-004")
-    embeddings = model.get_embeddings([query])
-    return embeddings[0].values
+def generate_embeddings(queries):
+    """Generate embeddings for a batch of queries."""
+    result = geni_client.models.embed_content(
+        model="gemini-embedding-001",
+        contents=queries,  # list of strings
+    )
+    return [embedding.values for embedding in result.embeddings]
 
+
+# MongoDB connection
 connection_string = os.environ.get("CONNECTION_STRING")
-client = pymongo.MongoClient(os.environ.get("CONNECTION_STRING"), tlsCAFile=certifi.where())
-docs = client["grocery_store"]["inventory"].find({"embedding": {"$exists": False}}).to_list()
+mongodb_client = pymongo.MongoClient(connection_string, tlsCAFile=certifi.where())
 
-print(len(docs))
+# Get documents without embeddings
+docs = list(mongodb_client["grocery_store"]["inventory"].find({"gemini_embedding": {"$exists": False}}))
+print(f"Found {len(docs)} documents without embeddings")
 
-for doc in docs:
-    if "embedding" not in doc:
-        product = doc.get("product", "")
-        print(f"Generating embeddings for {product}")
-        description = doc.get("description", "")
-        embedding = generate_embeddings(product + " " + description)
-        # Update the document with the new embedding
-        client["grocery_store"]["inventory"].update_one(
+BATCH_SIZE = 50  # adjust depending on API quota/limits
+
+for i in range(0, len(docs), BATCH_SIZE):
+    batch = docs[i:i + BATCH_SIZE]
+    queries = [f"{doc.get('product', '')} {doc.get('description', '')}" for doc in batch]
+
+    print(f"Generating embeddings for batch {i // BATCH_SIZE + 1} with {len(batch)} items")
+    embeddings = generate_embeddings(queries)
+
+    # Update each doc with its corresponding embedding
+    print(f"Updating documents for batch {i // BATCH_SIZE + 1} with {len(batch)} items")
+    for doc, embedding in zip(batch, embeddings):
+        mongodb_client["grocery_store"]["inventory"].update_one(
             {"_id": doc["_id"]},
-            {"$set": {"embedding": embedding}}
+            {"$set": {"gemini_embedding": embedding}}
         )
-    else:
-        print(f"Embedding already exist for {doc["name"]}")
-
