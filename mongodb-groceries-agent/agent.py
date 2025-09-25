@@ -5,12 +5,11 @@ from google.adk.agents import Agent
 from google import genai
 from google.genai import types
 
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT")
-PROJECT_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION")
-DATABASE_NAME = os.environ.get("DATABASE_NAME")
-COLLECTION_NAME = os.environ.get("COLLECTION_NAME")
-CONNECTION_STRING = os.environ.get("CONNECTION_STRING")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+CONNECTION_STRING = os.environ.get("CONNECTION_STRING")
+DATABASE_NAME = "grocery_store"
+INVENTORY_COLLECTION_NAME = "inventory"
+CARTS_COLLECTION_NAME = "carts"
 
 genai_client = genai.Client()
 database_client = pymongo.MongoClient(CONNECTION_STRING, tlsCAFile=certifi.where())
@@ -69,7 +68,7 @@ def find_similar_products(query: str) -> str:
     try :
         # Execute the aggregation pipeline to find similar products
         # The result will be a list of products with their details
-        documents = database_client[DATABASE_NAME][COLLECTION_NAME].aggregate(pipeline).to_list()
+        documents = database_client[DATABASE_NAME][INVENTORY_COLLECTION_NAME].aggregate(pipeline).to_list()
         return documents
     except pymongo.errors.OperationFailure as e:
         return "Failed to find similar products."
@@ -84,7 +83,7 @@ def add_to_cart(product: str, username: str) -> str:
     Returns:
       Success or failure message.
     """
-    products_collection = database_client[DATABASE_NAME][COLLECTION_NAME]
+    products_collection = database_client[DATABASE_NAME][INVENTORY_COLLECTION_NAME]
     product_document = products_collection.find_one(
         {"product": product},
         {
@@ -105,7 +104,7 @@ def add_to_cart(product: str, username: str) -> str:
     if not username:
         return "Username is required to add a product to the cart."
 
-    cart_collection = database_client[DATABASE_NAME]["carts"]
+    cart_collection = database_client[DATABASE_NAME][CARTS_COLLECTION_NAME]
     cart_collection.update_one(
         {"username": username},
         {"$addToSet": {"products": product_document}},
@@ -123,7 +122,7 @@ def calculate_cart_total(username: str) -> str:
     Returns:
       Total price
     """
-    cart_document = database_client[DATABASE_NAME]["carts"].find_one(
+    cart_document = database_client[DATABASE_NAME][CARTS_COLLECTION_NAME].find_one(
         {"username": username},
         {
             "_id": 0,
@@ -151,11 +150,12 @@ What you can do:
 - Suggest alternatives when the exact item is not available.
 - Add products to the user’s shopping cart.
 - Answer product-related questions in a clear and concise way.
+- Return the total in the user’s shopping cart.
 
 Available tools:
 1. **find_similar_products**: Search for products with names semantically similar to the user’s request.  
 2. **add_to_cart**: Add a product to the user’s cart in MongoDB. Pass only the product name (as it appears in the inventory collection) and the user’s username.  
-3. **calculate_cart_total**: Sum the total of all products in a user's cart and return it.
+3. **calculate_cart_total**: Sum the total of all products in a user's cart and return it. Pass the user’s username.
 
 Core guidelines:
 - **Always search first**: If a user asks for a product, call `find_similar_products` before attempting to add it to the cart.  
