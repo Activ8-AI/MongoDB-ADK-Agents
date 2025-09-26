@@ -13,10 +13,9 @@ Check out the [Medium tutorial](https://medium.com/google-cloud/build-a-python-a
 - Access to Google Cloud Gemini API
 - Access to a MongoDB Atlas cluster (instructions below)
 - Required Python packages (instructions below)
-- [Google ADK CLI](https://github.com/google/adk) installed (instructions below)
+- Google ADK Python installed (instructions below)
 
 ## Loading the Dataset and Generating Embeddings
-
 
 1. **Create a free MongoDB Atlas cluster**
 
@@ -79,7 +78,7 @@ pip install -r requirements.txt
 
 2. **Install the ADK CLI**
 
-Follow the [official ADK installation instructions](https://github.com/google/adk#installation) or run:
+Follow the [official ADK installation instructions](https://google.github.io/adk-docs/get-started/installation/) or run:
 
 ```bash
 pip install google-adk
