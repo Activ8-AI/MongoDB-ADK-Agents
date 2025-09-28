@@ -1,0 +1,35 @@
+{
+	"name": "MongoDB Atlas and Google Cloud ADK Agents",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "adk",
+	"features": {
+		"ghcr.io/devcontainers/features/java:1": {
+			"version": "21",
+			"installMaven": "true",
+			"mavenVersion": "3.9.10"
+		},
+		"ghcr.io/devcontainers/features/python:1": {}
+	},
+	"updateContentCommand": "bash .devcontainer/install-mongodb-db-tools.sh && bash .devcontainer/setup.sh && bash .devcontainer/import.sh",
+	"postCreateCommand": "",
+	"postAttachCommand": "",
+	"postStartCommand": "",
+	"customizations": {
+		"codespaces": {
+			"openFiles": [
+				"README.md"
+			]
+		},
+		"vscode": {
+			"extensions": [
+				"mongodb.mongodb-vscode",
+                "ms-python.python"
+			]
+		}
+	},
+	"forwardPorts": [
+		8888,
+		27017
+	],
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}"
+}
